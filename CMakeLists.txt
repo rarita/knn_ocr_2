@@ -37,15 +37,17 @@ set_target_properties(knn PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# для MSVC
+# Только для MSVC (вернее, для всех компилеров, но понимает это только MSVC :) )
 add_compile_options("/Zc:__cplusplus")
+add_compile_options("/openmp")
 
 # Добавьте источник в исполняемый файл этого проекта.
 add_executable (knn_ocr_2 "knn_ocr_2.cpp" "knn_ocr_2.h")
 # add_executable (knn_ocr_2 "knn.cu" "knn.cuh")
-set_target_properties(knn_ocr_2 PROPERTIES CUDA_ARCHITECTURES "50")
+set_target_properties(knn PROPERTIES CUDA_ARCHITECTURES "50")
 target_link_libraries( knn CUDA::cudart )
 target_link_libraries( knn_ocr_2 ${OpenCV_LIBS} knn)
-# print_all_variables()
+target_compile_options( knn PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler /openmp>) # поддерживать openmp в файлах cu (nvcc)
+print_all_variables()
 
 # TODO: Добавьте тесты и целевые объекты, если это необходимо.

@@ -1,6 +1,8 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+#include <omp.h>
+#include <chrono>
 #include <iostream>
 #include <filesystem>
 
@@ -18,6 +20,7 @@ inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort, 
 		errMsgStream << "Error on the GPU side:" << std::endl;
 		(errMsgStream << ... << args) << std::endl;
 		errMsgStream << "Error code : " << code << std::endl;
+		errMsgStream << "File: " << file << "; line: " << line << std::endl;
 		if (abort) {
 			throw std::exception(errMsgStream.str().c_str());
 		}
@@ -45,3 +48,5 @@ private:
 	uint8_t* trainDataPtr;
 	char* trainClsPtr;
 };
+
+void testOMP();

@@ -19,9 +19,13 @@ __global__ void init(int n, float* x, float* y) {
 KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution)
 {
 	
-	// Сразу сохраним resolution и trainDataSize, они нам дальше понадобится
+	// Время начала инициализации
+	const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+	// Сразу сохраним и вычислим все начальные параметры, они нам дальше понадобится
 	this->resolution = resolution;
 	this->trainDataSize = fileNames.size();
+	this->dataChunkSize = resolution * resolution * sizeof(uint8_t);
 
 	// Выделить память под тестовые данные
 	cudaError_t rsp;
@@ -34,9 +38,10 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 	if (rsp != cudaError::cudaSuccess) {
 		throw std::exception("Could not allocate memory for training classifiers: " + rsp);
 	}
-	
-	const int dataChunkSize = sizeof(uint8_t) * resolution * resolution;
+
+	#pragma omp parallel for
 	for (int idx = 0; idx < this->trainDataSize; idx++) {
+		// std::cout << "omp avail threads:" << omp_get_num_threads() << std::endl;
 
 		// считываем и сразу в монохром (1С8U)
 		cv::Mat mat = cv::imread(fileNames[idx], cv::ImreadModes::IMREAD_GRAYSCALE);
@@ -52,7 +57,7 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 			throw std::exception(errMsgStream.str().c_str());
 		}
 
-		rsp = cudaMemcpy(this->trainDataPtr + idx * dataChunkSize, &mat, dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice);
+		rsp = cudaMemcpy(this->trainDataPtr + idx * this->dataChunkSize, &mat, this->dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice);
 		CHECK_CUDA(rsp, true, "Cannot load file ", fileNames[idx]);
 
 		// Если все ОК и мы записали картинку, запишем ее имя в соотв. классифаер
@@ -71,7 +76,11 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 	std::cout << "16 first classifiers from GPU memory: " << testSample << std::endl;
 	*/
 
-	std::cout << this->trainDataSize << " training samples successfully loaded!" << std::endl <<
+
+	const std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+
+	std::cout << this->trainDataSize << " training samples successfully loaded in " <<
+		std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << " ms. " <<
 		"KNNClassifier " << this << " has been successfully initialized." << std::endl;
 
 }
@@ -123,6 +132,16 @@ KNNClassifier::~KNNClassifier()
 	
 	rsp = cudaFree(this->trainClsPtr);
 	CHECK_CUDA(rsp, true, "Could not free train classifiers memory on GPU...");
+
+}
+
+void testOMP() {
+
+	printf("Availiable OMP threads system-wide : %d\n", omp_get_max_threads());
+	# pragma omp parallel for
+	for (int idx = 0; idx < 10; idx++) {
+		assert(omp_get_num_threads() > 1);
+	}
 
 }
 
