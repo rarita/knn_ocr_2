@@ -47,7 +47,7 @@ add_executable (knn_ocr_2 "knn_ocr_2.cpp" "knn_ocr_2.h")
 set_target_properties(knn PROPERTIES CUDA_ARCHITECTURES "50")
 target_link_libraries( knn CUDA::cudart )
 target_link_libraries( knn_ocr_2 ${OpenCV_LIBS} knn)
-target_compile_options( knn PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler /openmp>) # поддерживать openmp в файлах cu (nvcc)
+target_compile_options( knn PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler /openmp --default-stream per-thread>) # поддерживать openmp в файлах cu (nvcc)
 print_all_variables()
 
 # TODO: Добавьте тесты и целевые объекты, если это необходимо.

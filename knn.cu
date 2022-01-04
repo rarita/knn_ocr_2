@@ -41,10 +41,10 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 
 	#pragma omp parallel for
 	for (int idx = 0; idx < this->trainDataSize; idx++) {
-		// std::cout << "omp avail threads:" << omp_get_num_threads() << std::endl;
 
 		// считываем и сразу в монохром (1С8U)
 		cv::Mat mat = cv::imread(fileNames[idx], cv::ImreadModes::IMREAD_GRAYSCALE);
+		// проверяем что считали и все ОК с изображением
 		if (mat.empty()) {
 			std::stringstream errMsgStream;
 			errMsgStream << "Error reading file " << fileNames[idx] << ". Mat is empty.";
@@ -57,7 +57,7 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 			throw std::exception(errMsgStream.str().c_str());
 		}
 
-		rsp = cudaMemcpy(this->trainDataPtr + idx * this->dataChunkSize, &mat, this->dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice);
+		rsp = cudaMemcpyAsync(this->trainDataPtr + idx * this->dataChunkSize, &mat, this->dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice);
 		CHECK_CUDA(rsp, true, "Cannot load file ", fileNames[idx]);
 
 		// Если все ОК и мы записали картинку, запишем ее имя в соотв. классифаер
@@ -67,6 +67,9 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 		CHECK_CUDA(rsp, true, "Cannot save classifier ", cls, " for file ", fileNames[idx]);
 
 	}
+
+	rsp = cudaDeviceSynchronize();
+	CHECK_CUDA(rsp, true, "Could not synchronize CUDA device after uploading data");
 
 	/*
 	char* testSample = (char*) malloc(17 * sizeof(char));
@@ -122,8 +125,7 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 
 }
 
-KNNClassifier::~KNNClassifier()
-{
+KNNClassifier::~KNNClassifier(){
 
 	cudaError_t rsp;
 
