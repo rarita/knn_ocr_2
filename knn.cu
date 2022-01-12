@@ -22,10 +22,35 @@ __global__ void dist(uint8_t* trainPtr, uint8_t* inputPtr, uint32_t* distPtr, in
 	int resSq = res * res;
 	for (int idx = index; idx < resSq * tds; idx += stride) {
 		// XOR-им соотв. пиксели тренировочных картинок и поданной на вход картинки
+		// при несоотв. пикселей получим 0xFF
 		uint8_t xorEd = trainPtr[idx] ^ inputPtr[idx % resSq];
+		#ifndef DBG_CUDA_KERNEL
+		printf("dist: index:%d; idx: %d; stride: %d; train data at idx: %d; input at idx: %d; xor at idx: %d; char: %d\n", 
+			index, idx, stride, trainPtr[idx], inputPtr[idx % resSq], xorEd, idx / resSq
+		);
+		#endif
 		// Сохраняем в массив расстояний
-		distPtr[idx / resSq] += xorEd / 255; // от 0 до 1
+		// оказалось что тут race condition :( как то не подумал об этом
+		distPtr[idx] = xorEd / 255; // от 0 до 1
 	}
+}
+
+__global__ void dist_reduce(uint32_t* distPtr, uint32_t* distRedPtr, int res, int tds) {
+	
+	int index = blockIdx.x * blockDim.x + threadIdx.x;
+	int resSq = res * res;
+	if (index > tds) {
+		return;
+	}
+
+	#pragma unroll
+	for (int idxRes = 0; idxRes < resSq; idxRes++) {
+		#ifdef DBG_CUDA_KERNEL
+		printf("dist_reduce: index: %d; idx: %d; idxRes: %d\n", index, idxRes);
+		#endif
+		distRedPtr[index] += distPtr[(index * resSq) + idxRes];
+	}
+
 }
 
 KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution)
@@ -56,6 +81,7 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 
 		// считываем и сразу в монохром (1С8U)
 		cv::Mat mat = cv::imread(fileNames[idx], cv::ImreadModes::IMREAD_GRAYSCALE);
+
 		// проверяем что считали и все ОК с изображением
 		if (mat.empty()) {
 			std::stringstream errMsgStream;
@@ -69,7 +95,13 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 			throw std::exception(errMsgStream.str().c_str());
 		}
 
-		rsp = cudaMemcpyAsync(this->trainDataPtr + idx * this->dataChunkSize, &mat, this->dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice);
+		// трешолдим на всякий случай
+		cv::threshold(mat, mat, 178, 255, cv::ThresholdTypes::THRESH_BINARY);
+
+		cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
+		std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
+
+		rsp = cudaMemcpyAsync(this->trainDataPtr + idx * this->dataChunkSize, vec.data(), this->dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice);
 		CHECK_CUDA(rsp, true, "Cannot load file ", fileNames[idx]);
 
 		// Если все ОК и мы записали картинку, запишем ее имя в соотв. классифаер
@@ -98,11 +130,45 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 		std::chrono::duration_cast<std::chrono::milliseconds>(end-start).count() << " ms. " <<
 		"KNNClassifier " << this << " has been successfully initialized." << std::endl;
 
+}
+
+void uploadMatToDev(thrust::device_vector<uint8_t>& dVec, int offset, cv::Mat& mat) {
+	// убедиться, что текстура имеет верный тип
+	assert(mat.type() == CV_8UC1);
+	cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
+	std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
+	thrust::host_vector<uint8_t> requestedMatHVec(vec);
+	thrust::copy(requestedMatHVec.begin(), requestedMatHVec.end(), dVec.begin() + offset);
+}
+
+void printDeviceTexture(thrust::device_vector<uint8_t>& dVec, int res, int offset) {
+	thrust::host_vector<uint8_t> matsHVec(dVec);
+	printf("Image in device memory (8 bit single channel):\n");
+	for (int y = 0; y < res; y++) {
+		for (int x = 0; x < res; x++) {
+			printf("%03d|", matsHVec[y * res + x + (offset * res * res)]);
+		}
+		printf("\n");
+	}
+	printf("\n");
+}
+
+template<typename T>
+void printDeviceVector(thrust::device_vector<T> dVec) {
+	thrust::host_vector<T> hVec(dVec);
+	printf("Vector size (%d) : ", hVec.size());
+	for (T& elem : hVec) {
+		printf("%d|", elem);
+	}
+	printf("\n");
+}
+
+void checkCudaAsyncMemMgmtSupport() {
 	int attr;
+	cudaError_t rsp;
 	rsp = cudaDeviceGetAttribute(&attr, cudaDevAttrMemoryPoolsSupported, 0);
 	CHECK_CUDA(rsp, true, "Can't probe for memory pools support");
 	printf("Device supports memory pooling (async memset): %d\n", attr);
-
 }
 
 std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vector<cv::Mat>& chars, int k)
@@ -110,30 +176,44 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 	// Делаем CUDA Streams по количеству букв на классификацию
 	// Самое интересное начинается здесь
 	cudaError_t rsp;
-	std::vector<cudaStream_t*> streams;
+	std::vector<cudaStream_t> streams;
 	std::vector<CharacterClassification> result(chars.size());
+	
+	const int texSize = this->resolution * this->resolution;
+
+	// Загружаем асинхронно в память GPU все chars
+	thrust::device_vector<uint8_t> matsDVec(chars.size() * texSize);
+	#pragma omp parallel for
+	for (int idx = 0; idx < chars.size(); idx++) {
+		// Здесь нельзя использовать streams, карточка не поддерживает асинх. управление памятью
+		uploadMatToDev(matsDVec, idx * texSize, chars[idx]);
+	}
+
+	printDeviceTexture(matsDVec, this->resolution, 0);
 
 	for (cv::Mat& mat : chars) {
 		
-		// Создаем стрим
+		// Создаем выделенный стрим
 		cudaStream_t stream;
 		rsp = cudaStreamCreate(&stream);
-		CHECK_CUDA(rsp, true, "Cannot initialize CUDA stream.");
-		
-		// маллочим и копируем букву которую хотим опознать на GPU
-		uint8_t* requestedMatPtr;
-		rsp = cudaMallocAsync(&requestedMatPtr, this->dataChunkSize, stream);
-		CHECK_CUDA(rsp, true, "Could not allocate memory for supplied image");
-		rsp = cudaMemcpyAsync(requestedMatPtr, &mat, this->dataChunkSize, cudaMemcpyKind::cudaMemcpyHostToDevice, stream);
-		CHECK_CUDA(rsp, true, "Could not transfer data of the supplied image to the GPU");
+		CHECK_CUDA(rsp, true, "Could not create stream");
+
+		streams.push_back(stream);
+		printf("Stream is: %d\n", stream);
+		// маллочим и копируем букву которую хотим опознать в память GPU
+		thrust::device_vector<uint8_t> requestedMatDVec(this->resolution*this->resolution);
+		cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
+		std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
+		thrust::host_vector<uint8_t> requestedMatHVec(vec);
+		thrust::copy(requestedMatHVec.begin(), requestedMatHVec.end(), requestedMatDVec.begin());
 
 		// если все ОК, инициализируем массив, в котором будут храниться расстояния
 		// между тренировочными картинками и семплом. мемсетим его большими числами
-		uint32_t* distPtr;
-		rsp = cudaMallocAsync(&distPtr, this->trainDataSize * sizeof(uint32_t), stream);
-		CHECK_CUDA(rsp, true, "Could not allocate memory for neighbor distances");
-		rsp = cudaMemsetAsync(distPtr, UINT_MAX, this->trainDataSize, stream);
-		CHECK_CUDA(rsp, true, "Could not initialize distances array");
+		thrust::device_vector<uint32_t> distVec(this->trainDataSize * this->resolution * this->resolution);
+		// rsp = cudaMallocAsync(&distPtr, this->trainDataSize * sizeof(uint32_t), stream);
+		// CHECK_CUDA(rsp, true, "Could not allocate memory for neighbor distances");
+		// rsp = cudaMemsetAsync(distPtr, UINT_MAX, this->trainDataSize, stream);
+		// CHECK_CUDA(rsp, true, "Could not initialize distances array");
 		// Ещё откопируем массив с классификаторами, чтобы его перемешивать in-place с помощью thrust
 		// Вектор, хранящий копию массива классификаторов
 		thrust::device_vector<char> clsCopyVec(this->trainDataSize);
@@ -145,7 +225,27 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		// Запускаем кернель, который посчитает нам расстояния между
 		// входным изображением и нашими тренировочными данными.
 		// вместо кернеля так же работает thrust::transform с модификатором thrust::bitwise_xor
-		dist<<<1, 256, 0, stream>>> (trainDataPtr, requestedMatPtr, distPtr, this->resolution, this->trainDataSize);
+
+		uint8_t* reqMatRawPtr = thrust::raw_pointer_cast(requestedMatDVec.data());
+		uint32_t* distRawPtr = thrust::raw_pointer_cast(distVec.data());
+		
+		const int threadsPerBlock = 256; // оптимально (?) для моей карты (MX130)
+
+		dist<<<4, threadsPerBlock, 0, stream>>> (this->trainDataPtr, reqMatRawPtr, distRawPtr, this->resolution, this->trainDataSize);
+		rsp = cudaGetLastError();
+		CHECK_CUDA(rsp, true, "Kernel launch was unsuccessful", "dist kernel");
+
+		// Суммируем результаты XOR для поиска значений расстояний
+		thrust::device_vector<uint32_t> distRedVec(this->trainDataSize);
+		uint32_t* distRedVecRawPtr = thrust::raw_pointer_cast(distRedVec.data());
+
+		const int blockCount = (this->trainDataSize / threadsPerBlock) + 1;
+		dist_reduce <<<blockCount, threadsPerBlock, 0, stream >>> (distRawPtr, distRedVecRawPtr, this->resolution, this->trainDataSize);
+		rsp = cudaGetLastError();
+		CHECK_CUDA(rsp, true, "Kernel launch was unsuccessful", "dist_reduce kernel");
+
+		cudaDeviceSynchronize();
+		printDeviceVector(distRedVec);
 
 		// Ищем индексы TOP-K соседей тренировочного изображения
 		// thrust::device_ptr<uint32_t> keysVecPtr = thrust::device_pointer_cast<uint32_t>(distPtr);
@@ -171,11 +271,11 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		// result.push_back(cc);
 
 		// Не забываем освободить массив и стрим когда доработаем
-		rsp = cudaFreeAsync(requestedMatPtr, stream);
-		CHECK_CUDA(rsp, true, "Could not free memory for input texture");
-		rsp = cudaFreeAsync(distPtr, stream);
-		CHECK_CUDA(rsp, true, "Could not allocate memory for input neighbours distances");
-		rsp = cudaStreamDestroy(stream);
+		// rsp = cudaFreeAsync(requestedMatPtr, stream);
+		// CHECK_CUDA(rsp, true, "Could not free memory for input texture");
+		// rsp = cudaFreeAsync(distPtr, stream);
+		// CHECK_CUDA(rsp, true, "Could not allocate memory for input neighbours distances");
+		rsp = cudaStreamDestroy(stream); // вроде норм, но опасно!!!!!!!!!!!!!!!!!!
 		CHECK_CUDA(rsp, true, "Could not shut down CUDA stream", stream);
 
 	}

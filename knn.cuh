@@ -15,6 +15,9 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui.hpp>
 
+// Раскомментить для дебага CUDA-кернелей
+// #define DBG_CUDA_KERNEL
+
 #define CHECK_CUDA(ans, abt, ...) { gpuAssert(ans, __FILE__, __LINE__, abt, ##__VA_ARGS__); }
 template<typename... Args>
 inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort, Args... args)

@@ -24,9 +24,12 @@ void findAllImagesInDirectory(std::vector<std::string> &container, std::string d
 std::vector<cv::Mat> preprocessInput(const std::string filename) {
 	
 	std::vector<cv::Mat> vec;
-	vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\A.png", cv::IMREAD_GRAYSCALE));
-	vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\B.png", cv::IMREAD_GRAYSCALE));
-	vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\C.png", cv::IMREAD_GRAYSCALE));
+	cv::Mat a2;
+	a2 = cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\A2.png", cv::IMREAD_GRAYSCALE);
+	cv::threshold(a2, a2, 178, 255, cv::ThresholdTypes::THRESH_BINARY);
+	vec.push_back(a2);
+	// vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\B.png", cv::IMREAD_GRAYSCALE));
+	// vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\C.png", cv::IMREAD_GRAYSCALE));
 	return vec;
 
 }
@@ -38,7 +41,7 @@ void showOutput(std::vector<CharacterClassification> outp) {
 int main()
 {	
 	std::vector<std::string> files;
-	findAllImagesInDirectory(files, "C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\chars");
+	findAllImagesInDirectory(files, "C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\chars_test");
 	std::cout << "Found " << files.size() << " files to load!" << std::endl;
 	
 	KNNClassifier classifier(files, 20);
