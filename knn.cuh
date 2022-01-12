@@ -5,6 +5,7 @@
 #include <thrust/generate.h>
 #include <thrust/sort.h>
 #include <thrust/copy.h>
+#include <thrust/iterator/constant_iterator.h>
 
 #include <omp.h>
 #include <chrono>

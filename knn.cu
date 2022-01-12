@@ -24,7 +24,7 @@ __global__ void dist(uint8_t* trainPtr, uint8_t* inputPtr, uint32_t* distPtr, in
 		// XOR-им соотв. пиксели тренировочных картинок и поданной на вход картинки
 		// при несоотв. пикселей получим 0xFF
 		uint8_t xorEd = trainPtr[idx] ^ inputPtr[idx % resSq];
-		#ifndef DBG_CUDA_KERNEL
+		#ifdef DBG_CUDA_KERNEL
 		printf("dist: index:%d; idx: %d; stride: %d; train data at idx: %d; input at idx: %d; xor at idx: %d; char: %d\n", 
 			index, idx, stride, trainPtr[idx], inputPtr[idx % resSq], xorEd, idx / resSq
 		);
@@ -177,11 +177,12 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 	// Самое интересное начинается здесь
 	cudaError_t rsp;
 	std::vector<cudaStream_t> streams;
-	std::vector<CharacterClassification> result(chars.size());
+	thrust::device_vector<uint8_t> verdict(chars.size());
 	
 	const int texSize = this->resolution * this->resolution;
 
 	// Загружаем асинхронно в память GPU все chars
+	const std::chrono::steady_clock::time_point startLoad = std::chrono::steady_clock::now();
 	thrust::device_vector<uint8_t> matsDVec(chars.size() * texSize);
 	#pragma omp parallel for
 	for (int idx = 0; idx < chars.size(); idx++) {
@@ -189,9 +190,11 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		uploadMatToDev(matsDVec, idx * texSize, chars[idx]);
 	}
 
-	printDeviceTexture(matsDVec, this->resolution, 0);
+	const std::chrono::steady_clock::time_point startProcessing = std::chrono::steady_clock::now();
+	std::cout << chars.size() << " characters to analyze uploaded in " <<
+		std::chrono::duration_cast<std::chrono::milliseconds>(startProcessing - startLoad).count() << " ms. ";
 
-	for (cv::Mat& mat : chars) {
+	for (int idx = 0; idx < chars.size(); idx++) {
 		
 		// Создаем выделенный стрим
 		cudaStream_t stream;
@@ -199,9 +202,9 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		CHECK_CUDA(rsp, true, "Could not create stream");
 
 		streams.push_back(stream);
-		printf("Stream is: %d\n", stream);
 		// маллочим и копируем букву которую хотим опознать в память GPU
 		thrust::device_vector<uint8_t> requestedMatDVec(this->resolution*this->resolution);
+		cv::Mat& mat = chars[idx];
 		cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
 		std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
 		thrust::host_vector<uint8_t> requestedMatHVec(vec);
@@ -210,10 +213,6 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		// если все ОК, инициализируем массив, в котором будут храниться расстояния
 		// между тренировочными картинками и семплом. мемсетим его большими числами
 		thrust::device_vector<uint32_t> distVec(this->trainDataSize * this->resolution * this->resolution);
-		// rsp = cudaMallocAsync(&distPtr, this->trainDataSize * sizeof(uint32_t), stream);
-		// CHECK_CUDA(rsp, true, "Could not allocate memory for neighbor distances");
-		// rsp = cudaMemsetAsync(distPtr, UINT_MAX, this->trainDataSize, stream);
-		// CHECK_CUDA(rsp, true, "Could not initialize distances array");
 		// Ещё откопируем массив с классификаторами, чтобы его перемешивать in-place с помощью thrust
 		// Вектор, хранящий копию массива классификаторов
 		thrust::device_vector<char> clsCopyVec(this->trainDataSize);
@@ -244,40 +243,53 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		rsp = cudaGetLastError();
 		CHECK_CUDA(rsp, true, "Kernel launch was unsuccessful", "dist_reduce kernel");
 
-		cudaDeviceSynchronize();
-		printDeviceVector(distRedVec);
-
 		// Ищем индексы TOP-K соседей тренировочного изображения
-		// thrust::device_ptr<uint32_t> keysVecPtr = thrust::device_pointer_cast<uint32_t>(distPtr);
-		// thrust::sort_by_key(thrust::cuda::par(*stream), keysVecPtr, keysVecPtr + this->trainDataSize, clsVec.begin());
+		thrust::sort_by_key(thrust::cuda::par.on(stream), distRedVec.begin(), distRedVec.end(), clsCopyVec.begin());
+		thrust::sort(thrust::cuda::par.on(stream), clsCopyVec.begin(), clsCopyVec.begin() + k);
 		
 		// Ищем преобладающий класс среди TOP-K соседей
 		// для этого сделаем вектор единичек чтобы reduce_by_key нам показал самый частый элемент
-		// thrust::device_ptr<uint8_t> clsVecPtr = thrust::device_pointer_cast(clsVec.data());
 		// возможно попробовать constant_iterator<uint8_t>
-		// thrust::device_vector<uint8_t> onesVec(k, 1);
-		// thrust::device_vector<uint8_t> clsOut(k);
-		// thrust::device_vector<uint8_t> cntOut(k);
-		// thrust::reduce_by_key(thrust::cuda::par(*stream), clsVecPtr, clsVecPtr + k * sizeof(uint8_t), onesVec.begin(), clsOut.begin(), cntOut.begin());
+		//thrust::device_vector<uint8_t> onesVec(this->trainDataSize, 1);
+		thrust::constant_iterator<uint8_t> onesConstIter(1);
+		thrust::device_vector<uint8_t> clsOut(k);
+		thrust::device_vector<uint8_t> cntOut(k);
+		thrust::reduce_by_key(thrust::cuda::par.on(stream), 
+			clsCopyVec.begin(), clsCopyVec.begin() + k, 
+			onesConstIter, clsOut.begin(), cntOut.begin()
+		);
+
 		// Ищем топ-1 в пересчитанном списке по значениям 
-		// thrust::device_ptr<uint8_t> cntOutPtr = thrust::device_pointer_cast<uint8_t>(onesVec.data());
-		// thrust::sort_by_key(thrust::cuda::par(*stream), cntOut.begin(), cntOut.end(), clsOut.begin());
-		
-		// Сохраняем преобладающий класс в векторе который пойдет на вывод из фции
-		// thrust::host_vector<uint8_t> clsHostVec(clsVec);
-		// CharacterClassification cc;
-		// cc.cls = static_cast<char>(clsHostVec[0]);
-		// cc.loc = &mat;
-		// result.push_back(cc);
+		thrust::sort_by_key(
+			thrust::cuda::par.on(stream), cntOut.begin(), cntOut.end(), 
+			clsOut.begin(), thrust::greater<uint8_t>()
+		);
 
-		// Не забываем освободить массив и стрим когда доработаем
-		// rsp = cudaFreeAsync(requestedMatPtr, stream);
-		// CHECK_CUDA(rsp, true, "Could not free memory for input texture");
-		// rsp = cudaFreeAsync(distPtr, stream);
-		// CHECK_CUDA(rsp, true, "Could not allocate memory for input neighbours distances");
-		rsp = cudaStreamDestroy(stream); // вроде норм, но опасно!!!!!!!!!!!!!!!!!!
-		CHECK_CUDA(rsp, true, "Could not shut down CUDA stream", stream);
+		// Сохраним результат классификации
+		verdict[idx] = clsOut[0];
 
+	}
+	printf("All streams are loaded\n");
+
+	// Ждем пока завершатся все стримы и освобождаем их
+	rsp = cudaDeviceSynchronize();
+	CHECK_CUDA(rsp, true, "Cannot synchronize the CUDA Device");
+	for (auto& stream : streams) {
+		rsp = cudaStreamDestroy(stream);
+		CHECK_CUDA(rsp, true, "Could not properly shut down CUDA stream", stream);
+	}
+
+	const std::chrono::steady_clock::time_point endProcessing = std::chrono::steady_clock::now();
+	std::cout << chars.size() << " characters analyzed in " <<
+		std::chrono::duration_cast<std::chrono::milliseconds>(endProcessing - startProcessing).count() << " ms. ";
+
+	thrust::host_vector<uint8_t> hVerdict(verdict);
+	std::vector<CharacterClassification> result;
+	for (int idx = 0; idx < chars.size(); idx++) {
+		CharacterClassification cc;
+		cc.cls = hVerdict[idx];
+		cc.loc = &chars[idx];
+		result.push_back(cc);
 	}
 
 	return result;
@@ -303,40 +315,5 @@ void testOMP() {
 	for (int idx = 0; idx < 10; idx++) {
 		assert(omp_get_num_threads() > 1);
 	}
-
-}
-
-int tutorial(void) {
-
-	int N = 1 << 20;
-
-	float* x, * y;
-	cudaMallocManaged(&x, N * sizeof(float));
-	cudaMallocManaged(&y, N * sizeof(float));
-
-	// initialize x and y arrays on the host
-	for (int i = 0; i < N; i++) {
-		x[i] = 1.0f;
-		y[i] = 2.0f;
-	}
-
-	// initialize x and y arrays on the host
-	add<<<1, 1 >>> (N, x, y);
-
-	// Wait for GPU to finish before accessing on host
-	cudaDeviceSynchronize();
-	cudaError err = cudaGetLastError();
-
-	// Check for errors (all values should be 3.0f)
-	float maxError = 0.0f;
-	for (int i = 0; i < N; i++)
-		maxError = fmax(maxError, fabs(y[i] - 3.0f));
-	std::cout << "Max error: " << maxError << std::endl;
-
-	// Free memory
-	cudaFree(x);
-	cudaFree(y);
-
-	return 0;
 
 }
