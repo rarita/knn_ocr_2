@@ -12,6 +12,8 @@ endmacro()
 #
 cmake_minimum_required (VERSION 3.19 FATAL_ERROR)
 
+# set(CUDAToolkit_ROOT "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.5")
+# set(CMAKE_CUDA_COMPILER "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.5/bin/nvcc.exe")
 # Добавляем в проект CUDA и обозначаем стандарт
 project ("knn_ocr_2" LANGUAGES CXX CUDA)
 
@@ -24,6 +26,7 @@ endif()
 # у меня просто их несколько
 find_package( OpenCV REQUIRED EXACT 4.5.3 PATHS "C:/opencv/build" )
 # find_package(Boost 1.78.0 COMPONENTS filesystem) в C++17 есть бусто-заменитель
+print_all_variables()
 find_package(CUDAToolkit)
 include_directories( ${OpenCV_INCLUDE_DIRS} )
 include_directories( ${CUDA_INCLUDE_DIRS} )
@@ -48,6 +51,6 @@ set_target_properties(knn PROPERTIES CUDA_ARCHITECTURES "50")
 target_link_libraries( knn CUDA::cudart )
 target_link_libraries( knn_ocr_2 ${OpenCV_LIBS} knn)
 target_compile_options( knn PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler /openmp --default-stream per-thread>) # поддерживать openmp в файлах cu (nvcc)
-print_all_variables()
+
 
 # TODO: Добавьте тесты и целевые объекты, если это необходимо.

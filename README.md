@@ -10,3 +10,5 @@ OpenMP + Async CUDA memcpy: 728 мс.
 # Литература
 CUDA 7: стандартный Stream в каждый Thread!
 https://developer.nvidia.com/blog/gpu-pro-tip-cuda-7-streams-simplify-concurrency/
+
+https://developer.nvidia.com/blog/cuda-pro-tip-write-flexible-kernels-grid-stride-loops/

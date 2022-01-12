@@ -21,6 +21,20 @@ void findAllImagesInDirectory(std::vector<std::string> &container, std::string d
 	}
 }
 
+std::vector<cv::Mat> preprocessInput(const std::string filename) {
+	
+	std::vector<cv::Mat> vec;
+	vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\A.png", cv::IMREAD_GRAYSCALE));
+	vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\B.png", cv::IMREAD_GRAYSCALE));
+	vec.push_back(cv::imread("C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\img\\C.png", cv::IMREAD_GRAYSCALE));
+	return vec;
+
+}
+
+void showOutput(std::vector<CharacterClassification> outp) {
+
+}
+
 int main()
 {	
 	std::vector<std::string> files;
@@ -28,5 +42,10 @@ int main()
 	std::cout << "Found " << files.size() << " files to load!" << std::endl;
 	
 	KNNClassifier classifier(files, 20);
+	std::vector<cv::Mat> chars = preprocessInput("image.png");
+	std::vector<CharacterClassification> classifications = classifier.classifyCharacters(chars, 20);
+	
+	showOutput(classifications);
+
 	return 0;
 }

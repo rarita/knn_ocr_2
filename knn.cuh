@@ -1,5 +1,10 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/generate.h>
+#include <thrust/sort.h>
+#include <thrust/copy.h>
 
 #include <omp.h>
 #include <chrono>
@@ -31,15 +36,16 @@ inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort, 
 }
 
 struct CharacterClassification {
+public:
 	char cls;
-	cv::Point loc;
+	cv::Mat* loc;
 };
 
 class KNNClassifier {
 public:
 	KNNClassifier() = delete;
 	KNNClassifier(std::vector<std::string> &fileNames, int resolution);
-	std::vector<CharacterClassification> classifyCharacters(std::vector<cv::Mat> &chars);
+	std::vector<CharacterClassification> classifyCharacters(std::vector<cv::Mat> &chars, int k);
 	~KNNClassifier();
 private:
 	int resolution;
