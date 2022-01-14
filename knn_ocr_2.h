@@ -16,4 +16,10 @@
 
 constexpr int CHAR_RES = 20;
 
+struct ExtractedCharacter {
+public:
+	uint x, y, w, h;
+	cv::Mat mat;
+};
+
 // TODO: установите здесь ссылки на дополнительные заголовки, требующиеся для программы.

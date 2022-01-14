@@ -16,6 +16,8 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui.hpp>
 
+#include "knn_ocr_2.h"
+
 // Раскомментить для дебага CUDA-кернелей
 // #define DBG_CUDA_KERNEL
 
@@ -42,14 +44,14 @@ inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort, 
 struct CharacterClassification {
 public:
 	char cls;
-	cv::Mat* loc;
+	uint x, y, w, h;
 };
 
 class KNNClassifier {
 public:
 	KNNClassifier() = delete;
 	KNNClassifier(std::vector<std::string> &fileNames, int resolution);
-	std::vector<CharacterClassification> classifyCharacters(std::vector<cv::Mat> &chars, int k);
+	std::vector<CharacterClassification> classifyCharacters(std::vector<ExtractedCharacter>& chars, int k);
 	~KNNClassifier();
 private:
 	int resolution;

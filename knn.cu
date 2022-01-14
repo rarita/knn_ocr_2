@@ -171,7 +171,7 @@ void checkCudaAsyncMemMgmtSupport() {
 	printf("Device supports memory pooling (async memset): %d\n", attr);
 }
 
-std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vector<cv::Mat>& chars, int k)
+std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vector<ExtractedCharacter>& chars, int k)
 {
 	// Делаем CUDA Streams по количеству букв на классификацию
 	// Самое интересное начинается здесь
@@ -187,7 +187,7 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 	#pragma omp parallel for
 	for (int idx = 0; idx < chars.size(); idx++) {
 		// Здесь нельзя использовать streams, карточка не поддерживает асинх. управление памятью
-		uploadMatToDev(matsDVec, idx * texSize, chars[idx]);
+		uploadMatToDev(matsDVec, idx * texSize, chars[idx].mat);
 	}
 
 	const std::chrono::steady_clock::time_point startProcessing = std::chrono::steady_clock::now();
@@ -204,7 +204,7 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 		streams.push_back(stream);
 		// маллочим и копируем букву которую хотим опознать в память GPU
 		thrust::device_vector<uint8_t> requestedMatDVec(this->resolution*this->resolution);
-		cv::Mat& mat = chars[idx];
+		cv::Mat& mat = chars[idx].mat;
 		cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
 		std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
 		thrust::host_vector<uint8_t> requestedMatHVec(vec);
@@ -288,7 +288,10 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 	for (int idx = 0; idx < chars.size(); idx++) {
 		CharacterClassification cc;
 		cc.cls = hVerdict[idx];
-		cc.loc = &chars[idx];
+		cc.x = chars[idx].x;
+		cc.y = chars[idx].y;
+		cc.w = chars[idx].w;
+		cc.h = chars[idx].h;
 		result.push_back(cc);
 	}
 
