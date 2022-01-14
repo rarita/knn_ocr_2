@@ -43,16 +43,15 @@ std::vector<ExtractedCharacter> preprocessInput(const std::string filename) {
 	std::vector<ExtractedCharacter> letters;
 	for (auto& bounds : letterBounds) {
 		cv::Mat letter = inp(bounds); // это только референс!!!
-
+		
+		// Sanity checks
+		assert(!letter.empty());
 		assert(letter.type() == CV_8UC1);
 		
 		int dimensionMax = max(bounds.width, bounds.height);
 
 		cv::Mat formattedLetter(cv::Size(dimensionMax, dimensionMax), CV_8UC1, cv::Scalar(255)); // cv::Mat::ones * 255.
 		assert(!formattedLetter.empty());
-		// cv::Mat formattedLetter = cv::Mat::zeros(dimensionMax, dimensionMax, letter.type());
-		// cv::imshow("l", formattedLetter);
-		// cv::waitKey();
 
 		if (bounds.width > bounds.height) {
 			int y = dimensionMax / 2 - bounds.height / 2;
@@ -92,30 +91,122 @@ void showOutput(std::vector<CharacterClassification> outp) {
 	}
 }
 
-int main()
+std::string toMultilineString(std::vector<CharacterClassification> outp) {
+	
+	// Найти высоту одной буквы (должна быть равная у всех, но найдем максимальную)
+	uint letterHeight = 0;
+	for (auto& cc : outp) {
+		if (cc.h > letterHeight) {
+			letterHeight = cc.h;
+		}
+	}
+
+	// Разбить на строки исходя из высоты букв
+	std::map<uint, std::vector<CharacterClassification>> heightMap;
+	for (auto& cc : outp) {
+		
+		int keyidx = -1;
+		for (auto& kv : heightMap) {
+			if (abs((long)(cc.y - kv.first)) <= letterHeight) {
+				keyidx = kv.first;
+			}
+		}
+
+		if (keyidx == -1) {
+			keyidx = cc.y;
+			heightMap[keyidx] = std::vector<CharacterClassification>();
+		}
+
+		heightMap[keyidx].push_back(cc);
+
+	}
+
+	// Отсортировать буквы в heightMap по координате X для каждой строки
+	// В C++ std::map по дефолту отсортирована в порядке возрастания ключей (operator <)
+	for (auto& kv : heightMap) {
+		std::sort(kv.second.begin(), kv.second.end(), 
+			[](CharacterClassification cc1, CharacterClassification cc2) { 
+				return cc1.x < cc2.x; 
+			}
+		);
+	}
+
+	// Вставить пробелы (?) для каждой строки
+	std::string result;
+	for (auto& kv : heightMap) {
+
+		std::string res;
+
+		// найти расст. между буквами без пробела
+		int letterDist = INT_MAX;
+		int minLetterWidth = INT_MAX;
+		for (int idx = 0; idx < kv.second.size() - 1; idx++) {
+			// символы уже отсортированы по Х
+			int dist = kv.second[idx + 1].x - (kv.second[idx].x + kv.second[idx].w);
+			if (dist < letterDist) {
+				letterDist = dist;
+			}
+			int letterWidth = kv.second[idx].w;
+			if (letterWidth < minLetterWidth) {
+				minLetterWidth = letterWidth;
+			}
+		}
+		if (letterDist < minLetterWidth) {
+			letterDist = minLetterWidth;
+		}
+		
+		for (int idx = 0; idx < kv.second.size() - 1; idx++) {
+			int dist = kv.second[idx + 1].x - (kv.second[idx].x + kv.second[idx].w);
+			res += kv.second[idx].cls;
+			if (dist > letterDist * 1.5) {
+				res += " ";
+			}
+		}
+
+		result += res + kv.second[kv.second.size() - 1].cls + "\n";
+
+	}
+
+	return result;
+
+}
+
+void printUsageInfo(std::string err) {
+	std::cout << "KNN OCR Application" << std::endl <<
+		"Usage: ./knn_ocr <path_to_training_data> <path_to_image_to_process> <K hyperparameter>" << std::endl;
+	if (!err.empty()) {
+		std::cout << err << std::endl;
+	}
+}
+
+int main(int argc, char* argv[])
 {	
+	if (argc != 4) {
+		printUsageInfo("invalid args quantity");
+		return 0;
+	}
+
+	std::string trainDataFolder, inputFile;
+	int k;
+	try {
+		trainDataFolder = argv[1];
+		inputFile = argv[2];
+		k = std::stoi(argv[3]);
+	}
+	catch (...) {
+		printUsageInfo("invalid args format");
+		return 0;
+	}
+
 	std::vector<std::string> files;
 	findAllImagesInDirectory(files, "C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\chars");
 	std::cout << "Found " << files.size() << " files to load!" << std::endl;
-	
-	// big black mat
-	// cv::Mat bigMat(cv::Size(512, 512), CV_8UC1, cv::Scalar(0));
-	// small white mat
-	// cv::Mat smallMat(cv::Size(256, 256), CV_8UC1, cv::Scalar(255));
-	// copy small to big with ROI
-	// smallMat.copyTo(bigMat(cv::Rect(255, 255, 255, 255)));
-
-	// display big mat
-	// cv::imshow("big", bigMat);
-	// cv::waitKey();
-
-	// return 0;
 
 	KNNClassifier classifier(files, 20);
-	std::vector<ExtractedCharacter> chars = preprocessInput("C:/Users/rarita/source/repos/knn_ocr_2/bigshot.png");
+	std::vector<ExtractedCharacter> chars = preprocessInput("C:/Users/rarita/source/repos/knn_ocr_2/ocr.png");
 	std::vector<CharacterClassification> classifications = classifier.classifyCharacters(chars, 20);
 	
-	showOutput(classifications);
+	std::cout << "Recognized: " << std::endl << toMultilineString(classifications) << std::endl;
 
 	return 0;
 }
