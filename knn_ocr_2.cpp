@@ -187,8 +187,8 @@ void printUsageInfo(std::string err) {
 	}
 }
 
-int main(int argc, char* argv[])
-{	
+int main(int argc, char* argv[]) {
+
 	if (argc != 4) {
 		printUsageInfo("invalid args quantity");
 		return 0;
@@ -210,11 +210,12 @@ int main(int argc, char* argv[])
 	findAllImagesInDirectory(files, trainDataFolder);
 	std::cout << "Found " << files.size() << " files to load!" << std::endl;
 
-	KNNClassifier classifier(files, 20);
+	KNNClassifier classifier(files, k);
 	std::vector<ExtractedCharacter> chars = preprocessInput(inputFile);
 	std::vector<CharacterClassification> classifications = classifier.classifyCharacters(chars, k);
 	
 	std::cout << "Recognized: " << std::endl << toMultilineString(classifications) << std::endl;
 
 	return 0;
+
 }

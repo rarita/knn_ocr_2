@@ -216,12 +216,15 @@ std::vector<CharacterClassification> KNNClassifier::classifyCharacters(std::vect
 
 		streams.push_back(stream);
 		// маллочим и копируем букву которую хотим опознать в память GPU
-		thrust::device_vector<uint8_t> requestedMatDVec(this->resolution*this->resolution);
-		cv::Mat& mat = chars[idx].mat;
-		cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
-		std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
-		thrust::host_vector<uint8_t> requestedMatHVec(vec);
-		thrust::copy(requestedMatHVec.begin(), requestedMatHVec.end(), requestedMatDVec.begin());
+		thrust::device_vector<uint8_t> requestedMatDVec(
+			matsDVec.begin() + texSize * idx, 
+			matsDVec.begin() + texSize * (idx + 1)
+		);
+		// cv::Mat& mat = chars[idx].mat;
+		// cv::Mat flat = mat.reshape(1, mat.total() * mat.channels());
+		// std::vector<uchar> vec = mat.isContinuous() ? flat : flat.clone();
+		// thrust::host_vector<uint8_t> requestedMatHVec(vec);
+		// thrust::copy(requestedMatHVec.begin(), requestedMatHVec.end(), requestedMatDVec.begin());
 
 		// если все ОК, инициализируем массив, в котором будут храниться расстояния
 		// между тренировочными картинками и семплом. мемсетим его большими числами
