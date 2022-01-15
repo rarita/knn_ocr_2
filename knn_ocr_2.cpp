@@ -42,6 +42,11 @@ std::vector<ExtractedCharacter> preprocessInput(const std::string filename) {
 
 	std::vector<ExtractedCharacter> letters;
 	for (auto& bounds : letterBounds) {
+		
+		if ((bounds.width * bounds.height) < MIN_TOLERANT_TOKEN_SIZE) {
+			continue;
+		}
+
 		cv::Mat letter = inp(bounds); // это только референс!!!
 		
 		// Sanity checks
@@ -93,10 +98,10 @@ void showOutput(std::vector<CharacterClassification> outp) {
 
 std::string toMultilineString(std::vector<CharacterClassification> outp) {
 	
-	// Найти высоту одной буквы (должна быть равная у всех, но найдем максимальную)
-	uint letterHeight = 0;
+	// Найти высоту одной буквы (должна быть равная у всех, но найдем минимальную)
+	uint letterHeight = UINT_MAX;
 	for (auto& cc : outp) {
-		if (cc.h > letterHeight) {
+		if (cc.h < letterHeight) {
 			letterHeight = cc.h;
 		}
 	}
@@ -140,9 +145,11 @@ std::string toMultilineString(std::vector<CharacterClassification> outp) {
 		// найти расст. между буквами без пробела
 		int letterDist = INT_MAX;
 		int minLetterWidth = INT_MAX;
+		std::vector<int> dists;
 		for (int idx = 0; idx < kv.second.size() - 1; idx++) {
 			// символы уже отсортированы по Х
 			int dist = kv.second[idx + 1].x - (kv.second[idx].x + kv.second[idx].w);
+			dists.push_back(dist);
 			if (dist < letterDist) {
 				letterDist = dist;
 			}
@@ -151,15 +158,16 @@ std::string toMultilineString(std::vector<CharacterClassification> outp) {
 				minLetterWidth = letterWidth;
 			}
 		}
-		if (letterDist < minLetterWidth) {
-			letterDist = minLetterWidth;
-		}
-		
-		for (int idx = 0; idx < kv.second.size() - 1; idx++) {
-			int dist = kv.second[idx + 1].x - (kv.second[idx].x + kv.second[idx].w);
-			res += kv.second[idx].cls;
-			if (dist > letterDist * 1.5) {
-				res += " ";
+
+		if (!dists.empty()) {
+			int meanDist = std::reduce(dists.begin(), dists.end()) / dists.size();
+
+			for (int idx = 0; idx < kv.second.size() - 1; idx++) {
+				int dist = kv.second[idx + 1].x - (kv.second[idx].x + kv.second[idx].w);
+				res += kv.second[idx].cls;
+				if (dist > meanDist) {
+					res += " ";
+				}
 			}
 		}
 
@@ -199,12 +207,12 @@ int main(int argc, char* argv[])
 	}
 
 	std::vector<std::string> files;
-	findAllImagesInDirectory(files, "C:\\Users\\rarita\\source\\repos\\knn_ocr_2\\chars");
+	findAllImagesInDirectory(files, trainDataFolder);
 	std::cout << "Found " << files.size() << " files to load!" << std::endl;
 
 	KNNClassifier classifier(files, 20);
-	std::vector<ExtractedCharacter> chars = preprocessInput("C:/Users/rarita/source/repos/knn_ocr_2/ocr.png");
-	std::vector<CharacterClassification> classifications = classifier.classifyCharacters(chars, 20);
+	std::vector<ExtractedCharacter> chars = preprocessInput(inputFile);
+	std::vector<CharacterClassification> classifications = classifier.classifyCharacters(chars, k);
 	
 	std::cout << "Recognized: " << std::endl << toMultilineString(classifications) << std::endl;
 
