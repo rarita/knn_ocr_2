@@ -16,7 +16,7 @@
 // include "device_launch_parameters.h"
 
 constexpr int CHAR_RES = 20;
-constexpr int MIN_TOLERANT_TOKEN_SIZE = (CHAR_RES * CHAR_RES) / 4;
+constexpr int MIN_TOLERANT_TOKEN_SIZE = (CHAR_RES * CHAR_RES) / 2;
 
 struct ExtractedCharacter {
 public:

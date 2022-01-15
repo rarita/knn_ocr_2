@@ -106,8 +106,21 @@ KNNClassifier::KNNClassifier(std::vector<std::string>& fileNames, int resolution
 
 		// Если все ОК и мы записали картинку, запишем ее имя в соотв. классифаер
 		// На *nix эта история работать не будет, нужна доработка
-		const char cls = fileNames[idx][fileNames[idx].find_last_of("//") + 1];
-		rsp = cudaMemset(this->trainClsPtr + idx, cls, 1);
+		const std::string fname = fileNames[idx].substr(fileNames[idx].find_last_of("//") + 1);
+		char cls;
+		if (fname.find('.') == 1) {
+			cls = fname[0];
+		}
+		else if ((fname.find('.') == 2) && (fname.find('_') == 0)) {
+			cls = fname[1];
+		}
+		else {
+			std::string errText = "Malformed test data sample name: " + fname;
+			throw std::exception(errText.c_str());
+		}
+
+		// const char cls = fileNames[idx][fileNames[idx].find_last_of("//") + 1];
+		rsp = cudaMemsetAsync(this->trainClsPtr + idx, cls, 1);
 		CHECK_CUDA(rsp, true, "Cannot save classifier ", cls, " for file ", fileNames[idx]);
 
 	}
